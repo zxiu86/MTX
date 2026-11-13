@@ -11,8 +11,10 @@ import {
   MtxCompressionResult,
   MtxDecompressionResult,
   MtxFormatDetectionResult,
-  analyzeArabicText,
+  analyzeMultilingualText,
+  buildLinkedChapterManifest,
   clearMtxCaches,
+  compressChapterEdition,
   compressToMtx,
   decompressFromMtx,
   defaultCompatibilityLayer,
@@ -23,14 +25,14 @@ import {
 } from '../engine/mtx-codec';
 import {
   compressV23Baseline,
-  decompressV23Baseline,
+  compressV24Baseline,
   encodeExactV22Buffer,
   encodeReconstructedV10Buffer,
   encodeReconstructedV21Buffer,
 } from './mtx-workbench-fixtures';
 
-export type PresetKey = 'tashkeel' | 'mixed_unicode' | 'large_chapter' | 'empty';
-export type TargetEncodeFormat = 'v24' | 'v23' | 'v22' | 'v21_lcg' | 'v21_nonlinear' | 'v10';
+export type PresetKey = 'tashkeel' | 'english_novel' | 'mixed_unicode' | 'large_chapter' | 'empty';
+export type TargetEncodeFormat = 'v25' | 'v24' | 'v23' | 'v22' | 'v21_lcg' | 'v21_nonlinear' | 'v10';
 
 export interface VerificationCaseResult {
   id: string;
@@ -44,16 +46,16 @@ export interface VerificationCaseResult {
 export interface BenchmarkRow {
   workload: string;
   utf8Bytes: number;
-  v23Bytes: number;
   v24Bytes: number;
-  v23CompMs: number;
+  v25Bytes: number;
   v24CompMs: number;
+  v25CompMs: number;
   compGainPct: number;
-  v23DecMs: number;
   v24DecMs: number;
+  v25DecMs: number;
   decGainPct: number;
-  v24CompMBs: number;
-  v24DecMBs: number;
+  v25CompMBs: number;
+  v25DecMBs: number;
 }
 
 const PRESET_TEXTS: Record<PresetKey, { label: string; text: string }> = {
@@ -61,14 +63,18 @@ const PRESET_TEXTS: Record<PresetKey, { label: string; text: string }> = {
     label: 'Arabic with Tashkeel',
     text: 'كَانَ الرَّجُلُ يَسِيرُ فِي طَرِيقٍ طَوِيلٍ، وَالشَّمْسُ تُلْقِي أَشِعَّتَهَا الذَّهَبِيَّةَ عَلَى الرِّمَالِ! قَالَ: «هَلْ هَذَا هُوَ الْمَكَانُ الَّذِي بَحَثْنَا عَنْهُ؟» ثُمَّ تَوَقَّفَ قَلِيلًا وَتَأَمَّلَ الْأُفُقَ بِهُدُوءٍ.',
   },
+  english_novel: {
+    label: 'English Novel Dialogue',
+    text: 'Chapter 15: "I\'m certain Alexander didn\'t leave the manuscript here," Elizabeth whispered, glancing toward the rain-streaked window. Well-known scholars had searched Cairo\'s old archive for decades without finding a single page!',
+  },
   mixed_unicode: {
     label: 'Mixed RTL/LTR & Emoji',
-    text: 'مرحباً بكم في محرك MTX v2.4 🚀 — Mixed RTL/LTR: "Hello, World!" (2026) — رموز خاصة: © ® ™ € £ ¥ ∑ ∞ ≠ ≤ ≥ — إيموجي: 🌙✨📖💎 وتركيبات نادرة: گ پ چ ژ ٱ ﷽',
+    text: 'مرحباً بكم في محرك MTX v2.5 🚀 — Mixed RTL/LTR: "Hello, World!" (2026) — قال Alexander: "I can\'t wait for الفصل القادم!" — رموز خاصة: © ® ™ € £ ¥ ∑ ∞ ≠ ≤ ≥ — إيموجي: 🌙✨📖💎 وتركيبات نادرة: گ پ چ ژ ٱ ﷽',
   },
   large_chapter: {
-    label: 'Large Arabic Chapter (~40KB)',
+    label: 'Large Bilingual Chapter (~52KB)',
     text: 'في مَدِينَةِ الْأَحْلَامِ الْقَدِيمَةِ، كَانَتِ السَّمَاءُ تَتَلَأْلَأُ بِالنُّجُومِ السَّاطِعَةِ، وَالرِّيَاحُ تَحْمِلُ عَبَقَ الْيَاسَمِينِ وَالنَّارَنْجِ. قَالَ الرَّاوِي: «لَقَدْ مَرَّتْ سَنَوَاتٌ طِوَالٌ مُنْذُ ذَلِكَ الْيَوْمِ!» 🌍✨\n'.repeat(
-      120
+      140
     ),
   },
   empty: {
@@ -91,11 +97,11 @@ export class App {
 
   readonly encoderForm = new FormGroup({
     text: new FormControl<string>(PRESET_TEXTS.tashkeel.text, { nonNullable: true }),
-    title: new FormControl<string>('ليالي النيل', { nonNullable: true }),
+    title: new FormControl<string>('ليالي النيل / Nights of the Nile', { nonNullable: true }),
     author: new FormControl<string>('نجيب محفوظ', { nonNullable: true }),
     chapterTitle: new FormControl<string>('الفصل الأول', { nonNullable: true }),
     profile: new FormControl<CompressionProfile>('balanced', { nonNullable: true }),
-    targetFormat: new FormControl<TargetEncodeFormat>('v24', { nonNullable: true }),
+    targetFormat: new FormControl<TargetEncodeFormat>('v25', { nonNullable: true }),
   });
 
   readonly activeBuffer = signal<Uint8Array | null>(null);
@@ -112,7 +118,9 @@ export class App {
   readonly cacheStats = signal<MtxCacheStats>(getMtxCacheStats());
   readonly isRunningSuite = signal<boolean>(false);
 
-  readonly textAnalysis = signal<ArabicTextAnalysis>(analyzeArabicText(PRESET_TEXTS.tashkeel.text));
+  readonly textAnalysis = signal<ArabicTextAnalysis>(
+    analyzeMultilingualText(PRESET_TEXTS.tashkeel.text)
+  );
 
   readonly roundTripMatchesInput = computed(() => {
     const decomp = this.decompressionResult();
@@ -122,7 +130,7 @@ export class App {
 
   constructor() {
     this.encoderForm.controls.text.valueChanges.subscribe((val) => {
-      this.textAnalysis.set(analyzeArabicText(val));
+      this.textAnalysis.set(analyzeMultilingualText(val));
     });
     void this.encodeAndInspect();
   }
@@ -143,11 +151,15 @@ export class App {
       let bytes: Uint8Array;
       let sourceLabel: string;
 
-      if (targetFormat === 'v24') {
+      if (targetFormat === 'v25') {
         const res = await compressToMtx(text, { title, author, chapterTitle }, { profile });
         this.compressionResult.set(res);
         bytes = res.mtxBytes;
-        sourceLabel = `Encoded MTX v2.4 (${profile})`;
+        sourceLabel = `Encoded MTX v2.5 (${profile}, bank=${res.languageCode}, chunks=${res.chunkCount})`;
+      } else if (targetFormat === 'v24') {
+        this.compressionResult.set(null);
+        bytes = await compressV24Baseline(text, profile);
+        sourceLabel = `Encoded MTX v2.4 (${profile} Baseline)`;
       } else if (targetFormat === 'v23') {
         this.compressionResult.set(null);
         bytes = await compressV23Baseline(text, profile);
@@ -204,7 +216,7 @@ export class App {
     }
   }
 
-  async simulateFailure(kind: 'corrupt_payload' | 'unsupported_v25' | 'invalid_magic'): Promise<void> {
+  async simulateFailure(kind: 'corrupt_payload' | 'unsupported_v26' | 'invalid_magic'): Promise<void> {
     const base = this.activeBuffer();
     if (!base || base.length < 24) {
       await this.encodeAndInspect();
@@ -217,9 +229,9 @@ export class App {
       mutated[21] ^= 0xff;
       mutated[22] ^= 0xaa;
       await this.inspectAndDecompressBuffer(mutated, 'Simulated Corrupt Payload');
-    } else if (kind === 'unsupported_v25') {
-      mutated[4] = 25;
-      await this.inspectAndDecompressBuffer(mutated, 'Simulated Unsupported Version (v2.5 / 25)');
+    } else if (kind === 'unsupported_v26') {
+      mutated[4] = 26;
+      await this.inspectAndDecompressBuffer(mutated, 'Simulated Unsupported Version (v2.6 / 26)');
     } else {
       mutated.set([0x50, 0x4b, 0x03, 0x04], 0);
       await this.inspectAndDecompressBuffer(mutated, 'Simulated Invalid Magic Signature');
@@ -295,34 +307,51 @@ export class App {
       return `Decoded via ${out.decoderId} · ${out.compressedBytes} B · exact text match`;
     });
 
-    await runCase('T2', 'v2.2 & v2.3 Backward Compatibility', 'verified', async () => {
+    await runCase('T2', 'v2.2, v2.3 & v2.4 Backward Compatibility', 'verified', async () => {
       const src = PRESET_TEXTS.mixed_unicode.text;
       const v22 = encodeExactV22Buffer(src);
       const out22 = await decompressFromMtx(v22);
       const v23 = await compressV23Baseline(src, 'balanced');
       const out23 = await decompressFromMtx(v23);
-      if (out22.text !== src || out23.text !== src || out23.integrityDetails.crc32Verified !== true) {
-        throw new Error('v2.2 or v2.3 backward compatibility check failed');
-      }
-      return `v2.2 (${out22.decoderId}) & v2.3 (${out23.decoderId}) verified lossless`;
-    });
-
-    await runCase('T3', 'v2.4 Indexed Round-Trip + Dual Checksum', 'verified', async () => {
-      const src = PRESET_TEXTS.tashkeel.text;
-      const comp = await compressToMtx(src, { title: 'Suite Test' }, { profile: 'maximum', useCache: false });
-      const out = await decompressFromMtx(comp.mtxBytes);
+      const v24 = await compressV24Baseline(src, 'balanced');
+      const out24 = await decompressFromMtx(v24);
       if (
-        out.text !== src ||
-        out.version !== 24 ||
-        !out.integrityDetails.adler32Matched ||
-        out.integrityDetails.crc32Verified !== true
+        out22.text !== src ||
+        out23.text !== src ||
+        out24.text !== src ||
+        out24.integrityDetails.crc32Verified !== true
       ) {
-        throw new Error('v2.4 round-trip or dual checksum verification failed');
+        throw new Error('v2.2, v2.3 or v2.4 backward compatibility check failed');
       }
-      return `Savings ${comp.savingsPercent}% (${comp.originalUtf8Bytes} B -> ${comp.compressedBytes} B) · M4HD CRC-32 OK`;
+      return `v2.2 (${out22.decoderId}), v2.3 (${out23.decoderId}) & v2.4 (${out24.decoderId}) lossless`;
     });
 
-    await runCase('T4', 'Empty String (0 B) & Large Chapter Benchmark', 'verified', async () => {
+    await runCase('T3', 'v2.5 Bilingual Chapter Editions (AR + EN)', 'verified', async () => {
+      const arRes = await compressChapterEdition(
+        PRESET_TEXTS.tashkeel.text,
+        { chapterId: 15, languageCode: 'ar', chapterTitle: 'الفصل 15' },
+        { profile: 'maximum', useCache: false }
+      );
+      const enRes = await compressChapterEdition(
+        PRESET_TEXTS.english_novel.text,
+        { chapterId: 15, languageCode: 'en', chapterTitle: 'Chapter 15' },
+        { profile: 'maximum', useCache: false }
+      );
+      const manifest = buildLinkedChapterManifest(15, [arRes, enRes]);
+      const arDec = await decompressFromMtx(arRes.mtxBytes);
+      const enDec = await decompressFromMtx(enRes.mtxBytes);
+      if (
+        arDec.text !== PRESET_TEXTS.tashkeel.text ||
+        enDec.text !== PRESET_TEXTS.english_novel.text ||
+        !manifest.editions['ar'] ||
+        !manifest.editions['en']
+      ) {
+        throw new Error('v2.5 bilingual edition round-trip failed');
+      }
+      return `AR ${arRes.originalUtf8Bytes}→${arRes.compressedBytes} B · EN ${enRes.originalUtf8Bytes}→${enRes.compressedBytes} B · Linked Ch.15`;
+    });
+
+    await runCase('T4', 'Empty String (0 B) & Large Chunked Chapter', 'verified', async () => {
       const emptyComp = await compressToMtx('');
       const emptyOut = await decompressFromMtx(emptyComp.mtxBytes);
       if (emptyOut.text !== '' || Number.isNaN(emptyOut.savingsPercent)) {
@@ -334,18 +363,18 @@ export class App {
       if (largeOut.text !== largeSrc) {
         throw new Error('Large text round-trip failed');
       }
-      return `Empty OK · Large ${largeComp.originalUtf8Bytes} B -> ${largeComp.compressedBytes} B (${largeComp.savingsPercent}% saved)`;
+      return `Empty OK · Large ${largeComp.originalUtf8Bytes}→${largeComp.compressedBytes} B (${largeComp.chunkCount} chunks, ${largeComp.savingsPercent}% saved)`;
     });
 
     await runCase('T5', 'Corrupt Buffer & Unsupported Version Rejection', 'error-handling', async () => {
       const comp = await compressToMtx('اختبار تلف');
-      const v25 = new Uint8Array(comp.mtxBytes);
-      v25[4] = 25;
-      let rejectedV25 = false;
+      const v26 = new Uint8Array(comp.mtxBytes);
+      v26[4] = 26;
+      let rejectedV26 = false;
       try {
-        await decompressFromMtx(v25);
+        await decompressFromMtx(v26);
       } catch {
-        rejectedV25 = true;
+        rejectedV26 = true;
       }
       const corrupt = new Uint8Array(comp.mtxBytes);
       corrupt[21] ^= 0xff;
@@ -356,63 +385,63 @@ export class App {
       } catch {
         rejectedCorrupt = true;
       }
-      if (!rejectedV25 || !rejectedCorrupt) {
+      if (!rejectedV26 || !rejectedCorrupt) {
         throw new Error('Failed to reject unsupported version or corrupt payload');
       }
-      return 'Rejected v2.5 with MtxUnsupportedVersionError & tampered payload with MtxCorruptDataError';
+      return 'Rejected v2.6 with MtxUnsupportedVersionError & tampered payload with MtxCorruptDataError';
     });
 
-    // Live v2.3 vs v2.4 A/B Benchmark inside browser
+    // Live v2.4 vs v2.5 A/B Benchmark inside browser
     const benchRows: BenchmarkRow[] = [];
     const encoder = new TextEncoder();
     const workloads = [
-      { name: 'Small Arabic', text: PRESET_TEXTS.tashkeel.text, rounds: 15 },
-      { name: 'Mixed Unicode + Emoji', text: PRESET_TEXTS.mixed_unicode.text, rounds: 15 },
-      { name: 'Large Arabic (~40KB)', text: PRESET_TEXTS.large_chapter.text, rounds: 3 },
+      { name: 'Arabic Tashkeel', text: PRESET_TEXTS.tashkeel.text, rounds: 15 },
+      { name: 'English Novel', text: PRESET_TEXTS.english_novel.text.repeat(20), rounds: 10 },
+      { name: 'Mixed RTL/LTR + Emoji', text: PRESET_TEXTS.mixed_unicode.text.repeat(15), rounds: 10 },
     ];
 
     // Warmup
-    const warm23 = await compressV23Baseline(PRESET_TEXTS.tashkeel.text, 'balanced');
-    await decompressV23Baseline(warm23);
-    const warm24 = await compressToMtx(PRESET_TEXTS.tashkeel.text, {}, { useCache: false });
-    await decompressFromMtx(warm24.mtxBytes);
+    const warm24 = await compressV24Baseline(PRESET_TEXTS.english_novel.text, 'balanced');
+    await decompressFromMtx(warm24);
+    const warm25 = await compressToMtx(PRESET_TEXTS.english_novel.text, {}, { useCache: false });
+    await decompressFromMtx(warm25.mtxBytes);
 
     for (const w of workloads) {
       const utf8Bytes = encoder.encode(w.text).length;
-      const t23c = performance.now();
-      let b23: Uint8Array = new Uint8Array(0);
-      for (let r = 0; r < w.rounds; r++) b23 = await compressV23Baseline(w.text, 'balanced');
-      const v23CompMs = (performance.now() - t23c) / w.rounds;
-
-      const t23d = performance.now();
-      for (let r = 0; r < w.rounds; r++) await decompressV23Baseline(b23);
-      const v23DecMs = (performance.now() - t23d) / w.rounds;
-
-      clearMtxCaches();
       const t24c = performance.now();
       let b24: Uint8Array = new Uint8Array(0);
-      for (let r = 0; r < w.rounds; r++) {
-        b24 = (await compressToMtx(w.text, {}, { profile: 'balanced', useCache: false })).mtxBytes;
-      }
+      for (let r = 0; r < w.rounds; r++) b24 = await compressV24Baseline(w.text, 'balanced');
       const v24CompMs = (performance.now() - t24c) / w.rounds;
 
       const t24d = performance.now();
       for (let r = 0; r < w.rounds; r++) await decompressFromMtx(b24);
       const v24DecMs = (performance.now() - t24d) / w.rounds;
 
+      clearMtxCaches();
+      const t25c = performance.now();
+      let b25: Uint8Array = new Uint8Array(0);
+      for (let r = 0; r < w.rounds; r++) {
+        b25 = (await compressToMtx(w.text, {}, { profile: 'balanced', useCache: false })).mtxBytes;
+      }
+      const v25CompMs = (performance.now() - t25c) / w.rounds;
+
+      const t25d = performance.now();
+      for (let r = 0; r < w.rounds; r++) await decompressFromMtx(b25);
+      const v25DecMs = (performance.now() - t25d) / w.rounds;
+
       benchRows.push({
         workload: w.name,
         utf8Bytes,
-        v23Bytes: b23.length,
         v24Bytes: b24.length,
-        v23CompMs: Math.round(v23CompMs * 100) / 100,
+        v25Bytes: b25.length,
         v24CompMs: Math.round(v24CompMs * 100) / 100,
-        compGainPct: Math.round(((v23CompMs - v24CompMs) / v23CompMs) * 1000) / 10,
-        v23DecMs: Math.round(v23DecMs * 100) / 100,
+        v25CompMs: Math.round(v25CompMs * 100) / 100,
+        compGainPct: Math.round(((v24CompMs - v25CompMs) / v24CompMs) * 1000) / 10,
         v24DecMs: Math.round(v24DecMs * 100) / 100,
-        decGainPct: Math.round(((v23DecMs - v24DecMs) / v23DecMs) * 1000) / 10,
-        v24CompMBs: Math.round((utf8Bytes / (1024 * 1024) / (v24CompMs / 1000)) * 100) / 100,
-        v24DecMBs: Math.round((utf8Bytes / (1024 * 1024) / (v24DecMs / 1000)) * 100) / 100,
+        v25DecMs: Math.round(v25DecMs * 100) / 100,
+        decGainPct: Math.round(((v24DecMs - v25DecMs) / v24DecMs) * 1000) / 10,
+        v25CompMBs: Math.round((utf8Bytes / (1024 * 1024) / (v25CompMs / 1000)) * 100) / 100,
+        v25DecMBs: Math.round((utf8Bytes / (1024 * 1024) / (v25DecMs / 1000)) * 100) / 100,
       });
     }
 

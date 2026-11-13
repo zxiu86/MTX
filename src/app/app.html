@@ -45,15 +45,15 @@
         <div class="text-xs font-medium text-slate-500 flex items-center gap-2">
           <span>Engine {{ engineVersion }}</span>
           <span aria-hidden="true">·</span>
-          <span>Format v2.4 ({{ currentFormatVersion }})</span>
+          <span>Format v2.5 ({{ currentFormatVersion }})</span>
           <span aria-hidden="true">·</span>
-          <span>Single-File Indexed BPE &amp; Reverse Lookup</span>
+          <span>Multilingual Dual-Bank &amp; Chunk-Indexed BPE</span>
         </div>
         <h1 class="text-2xl md:text-3xl font-semibold tracking-tight text-slate-900" style="text-wrap: balance;">
-          Indexed Arabic Morpheme Compression &amp; Cross-Version Compatibility
+          Universal Arabic &amp; English Novel Compression Engine
         </h1>
         <p class="text-sm text-slate-600 leading-relaxed">
-          Single-file MTX v2.4 engine featuring root-indexed Radix Trie matching, integer-ID doubly-linked BPE with binary max-heap, reverse vocabulary lookup tables, bounded LRU caching, and full compatibility across v1.0–v2.4.
+          Single-file MTX v2.5 engine with independent Arabic, English, and Balanced Bilingual vocabulary banks, 31-bit SMI integer-ID BPE, paragraph-aligned partial chunk access, and full v1.0–v2.5 compatibility.
         </p>
       </div>
 
@@ -89,14 +89,21 @@
               (click)="applyPreset('tashkeel')"
               class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
-              Tashkeel
+              Arabic
+            </button>
+            <button
+              type="button"
+              (click)="applyPreset('english_novel')"
+              class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              English
             </button>
             <button
               type="button"
               (click)="applyPreset('mixed_unicode')"
               class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
-              Unicode
+              Mixed
             </button>
             <button
               type="button"
@@ -187,7 +194,8 @@
                 formControlName="targetFormat"
                 class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
               >
-                <option value="v24">MTX v2.4 (Current Indexed Output)</option>
+                <option value="v25">MTX v2.5 (Current Multilingual Output)</option>
+                <option value="v24">MTX v2.4 (Indexed Baseline)</option>
                 <option value="v23">MTX v2.3 (Baseline Format)</option>
                 <option value="v22">MTX v2.2 (Exact Fortified Spec)</option>
                 <option value="v21_lcg">MTX v2.1 (Simulated LCG Fixture)</option>
@@ -232,11 +240,11 @@
             </button>
             <button
               type="button"
-              (click)="simulateFailure('unsupported_v25')"
+              (click)="simulateFailure('unsupported_v26')"
               class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
               <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">block</mat-icon>
-              <span>Unsupported v2.5</span>
+              <span>Unsupported v2.6</span>
             </button>
             <button
               type="button"
@@ -414,9 +422,9 @@
     <section id="verification" class="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-slate-900">04. v2.3 vs v2.4 Benchmark &amp; Verification Matrix</h2>
+          <h2 class="text-base font-semibold text-slate-900">04. v2.4 vs v2.5 Multilingual Benchmark &amp; Verification Matrix</h2>
           <p class="text-xs text-slate-500 mt-0.5">
-            Measures raw algorithmic performance after JIT warmup with LRU cache disabled so BPE, Trie, and Reverse Index gains are measured directly.
+            Measures raw multilingual performance after JIT warmup with LRU cache disabled across Arabic, English, and Mixed workloads.
           </p>
         </div>
         <button
@@ -437,12 +445,12 @@
               <tr class="border-b border-slate-200 text-slate-500 font-medium">
                 <th class="py-2.5 pr-4">Workload</th>
                 <th class="py-2.5 pr-4 text-right">UTF-8</th>
-                <th class="py-2.5 pr-4 text-right">v2.3 / v2.4 Size</th>
-                <th class="py-2.5 pr-4 text-right">Comp v2.3 -> v2.4</th>
+                <th class="py-2.5 pr-4 text-right">v2.4 / v2.5 Size</th>
+                <th class="py-2.5 pr-4 text-right">Comp v2.4 -&gt; v2.5</th>
                 <th class="py-2.5 pr-4 text-right">Comp Gain</th>
-                <th class="py-2.5 pr-4 text-right">Dec v2.3 -> v2.4</th>
+                <th class="py-2.5 pr-4 text-right">Dec v2.4 -&gt; v2.5</th>
                 <th class="py-2.5 pr-4 text-right">Dec Gain</th>
-                <th class="py-2.5 text-right">v2.4 Dec MB/s</th>
+                <th class="py-2.5 text-right">v2.5 Dec MB/s</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
@@ -450,12 +458,12 @@
                 <tr class="hover:bg-slate-50/70">
                   <td class="py-3 pr-4 font-medium text-slate-900 whitespace-nowrap">{{ row.workload }}</td>
                   <td class="py-3 pr-4 text-right font-mono text-slate-600">{{ row.utf8Bytes }} B</td>
-                  <td class="py-3 pr-4 text-right font-mono text-slate-600">{{ row.v23Bytes }} / {{ row.v24Bytes }} B</td>
-                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v23CompMs }} -> {{ row.v24CompMs }} ms</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-600">{{ row.v24Bytes }} / {{ row.v25Bytes }} B</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v24CompMs }} -&gt; {{ row.v25CompMs }} ms</td>
                   <td class="py-3 pr-4 text-right font-mono font-semibold text-emerald-700">{{ row.compGainPct }}%</td>
-                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v23DecMs }} -> {{ row.v24DecMs }} ms</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v24DecMs }} -&gt; {{ row.v25DecMs }} ms</td>
                   <td class="py-3 pr-4 text-right font-mono font-semibold text-emerald-700">{{ row.decGainPct }}%</td>
-                  <td class="py-3 text-right font-mono text-slate-900">{{ row.v24DecMBs }} MB/s</td>
+                  <td class="py-3 text-right font-mono text-slate-900">{{ row.v25DecMBs }} MB/s</td>
                 </tr>
               }
             </tbody>
@@ -466,7 +474,7 @@
       @if (verificationResults().length === 0) {
         <div class="rounded-lg border border-dashed border-slate-200 py-8 px-4 text-center">
           <p class="text-xs text-slate-600">
-            Click "Run Benchmark &amp; Suite" to execute live v2.3 vs v2.4 performance comparisons and cross-version integrity checks.
+            Click "Run Benchmark &amp; Suite" to execute live v2.4 vs v2.5 multilingual benchmarks and cross-version integrity checks.
           </p>
         </div>
       } @else {

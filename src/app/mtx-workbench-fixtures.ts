@@ -7,6 +7,7 @@ import { deflateSync, inflateSync } from 'fflate';
 import {
   CompressionProfile,
   ESCAPE_TOKEN,
+  FastVocabularyTrie,
   MTX_CIPHER_SECRET,
   MTX_HEADER_SIZE,
   MTX_MAGIC_V1,
@@ -14,12 +15,17 @@ import {
   MTX_V23_EXTENDED_HEADER_SIZE,
   MTX_V23_FORMAT_SPEC,
   MTX_V23_PAYLOAD_MAGIC,
+  MTX_V24_EXTENDED_HEADER_SIZE,
+  MTX_V24_FORMAT_SPEC,
+  MTX_V24_PAYLOAD_MAGIC,
   MtxMetadata,
   PRECOMPILED_VOCAB,
   PRECOMPILED_VOCAB_HASH,
   applyLegacyLcgKeystream,
+  applyMtxKeystream,
   calculateAdler32,
   calculateCrc32,
+  calculateCrc32Bytes,
   getUtf8ByteLength,
 } from '../engine/mtx-codec';
 
@@ -456,4 +462,366 @@ export function encodeReconstructedV10Buffer(text: string): Uint8Array {
   buf.set(MTX_MAGIC_V1, 0);
   buf[4] = 10;
   return buf;
+}
+
+// ---------------------------------------------------------------------------
+// Authentic MTX v2.4 Baseline Encoder (M4HD, PRECOMPILED_VOCAB only, pre-v2.5)
+// ---------------------------------------------------------------------------
+
+const V24_BASELINE_TRIE: FastVocabularyTrie = (() => {
+  const t = new FastVocabularyTrie();
+  for (let i = 0; i < PRECOMPILED_VOCAB.length; i++) {
+    t.insert(PRECOMPILED_VOCAB[i], i);
+  }
+  return t;
+})();
+
+const V24_BASELINE_UTF8_LENS: Uint8Array = (() => {
+  const arr = new Uint8Array(PRECOMPILED_VOCAB.length);
+  for (let i = 0; i < PRECOMPILED_VOCAB.length; i++) {
+    arr[i] = getUtf8ByteLength(PRECOMPILED_VOCAB[i]);
+  }
+  return arr;
+})();
+
+class V24BaselineHeap {
+  private s = new Int32Array(256);
+  private f = new Int32Array(256);
+  private k = new Float64Array(256);
+  size = 0;
+
+  push(sav: number, freq: number, key: number): void {
+    if (this.size >= this.s.length) {
+      const n = this.s.length * 2;
+      const ns = new Int32Array(n);
+      const nf = new Int32Array(n);
+      const nk = new Float64Array(n);
+      ns.set(this.s);
+      nf.set(this.f);
+      nk.set(this.k);
+      this.s = ns;
+      this.f = nf;
+      this.k = nk;
+    }
+    let idx = this.size++;
+    while (idx > 0) {
+      const p = (idx - 1) >>> 1;
+      if (this.s[p] > sav || (this.s[p] === sav && this.f[p] >= freq)) break;
+      this.s[idx] = this.s[p];
+      this.f[idx] = this.f[p];
+      this.k[idx] = this.k[p];
+      idx = p;
+    }
+    this.s[idx] = sav;
+    this.f[idx] = freq;
+    this.k[idx] = key;
+  }
+
+  popInto(out: { savings: number; freq: number; key: number }): boolean {
+    if (this.size === 0) return false;
+    out.savings = this.s[0];
+    out.freq = this.f[0];
+    out.key = this.k[0];
+    const last = --this.size;
+    if (last > 0) {
+      const ls = this.s[last];
+      const lf = this.f[last];
+      const lk = this.k[last];
+      let idx = 0;
+      const half = this.size >>> 1;
+      while (idx < half) {
+        let c = (idx << 1) + 1;
+        const r = c + 1;
+        if (r < this.size && (this.s[r] > this.s[c] || (this.s[r] === this.s[c] && this.f[r] > this.f[c]))) {
+          c = r;
+        }
+        if (ls > this.s[c] || (ls === this.s[c] && lf >= this.f[c])) break;
+        this.s[idx] = this.s[c];
+        this.f[idx] = this.f[c];
+        this.k[idx] = this.k[c];
+        idx = c;
+      }
+      this.s[idx] = ls;
+      this.f[idx] = lf;
+      this.k[idx] = lk;
+    }
+    return true;
+  }
+}
+
+export async function compressV24Baseline(
+  text: string,
+  profile: CompressionProfile = 'balanced'
+): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const rawUtf8 = encoder.encode(text);
+  const rawUtf8Bytes = rawUtf8.length;
+  const checksum = calculateAdler32(text);
+  const crc32Checksum = calculateCrc32Bytes(rawUtf8);
+
+  const trimmedWords = text.trim();
+  const fullMetadata: MtxMetadata = {
+    title: 'رواية جديدة',
+    author: 'كاتب مجهول',
+    chapterTitle: 'الفصل الأول',
+    chapterIndex: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    wordCount: trimmedWords.length > 0 ? trimmedWords.split(/\s+/).filter(Boolean).length : 0,
+    tags: ['رواية عربية', 'صيغة MTX v2.4'],
+    genre: 'أدب عربي',
+    translator: '',
+    notes: '',
+    codecVersion: 'MTX 2.4.0 Indexed',
+    formatVersion: 24,
+  };
+
+  const preLen = PRECOMPILED_VOCAB.length;
+  const ESC_BASE = 1024;
+  const STRIDE = 1048576;
+  let cap = Math.max(16, text.length);
+  let rawIds = new Int32Array(cap);
+  let tokenCount = 0;
+  const escMap = new Map<string, number>();
+  const escLits: string[] = [];
+  const escLens: number[] = [];
+
+  let i = 0;
+  while (i < text.length) {
+    const packed = V24_BASELINE_TRIE.findLongestPrefixPacked(text, i);
+    let tid: number;
+    if (packed !== 0) {
+      tid = (packed & 1023) - 1;
+      i += packed >>> 10;
+    } else {
+      const cp = text.codePointAt(i);
+      const clen = cp !== undefined && cp > 0xffff ? 2 : 1;
+      const lit = text.slice(i, i + clen);
+      i += clen;
+      const existing = escMap.get(lit);
+      if (existing !== undefined) {
+        tid = existing;
+      } else {
+        tid = ESC_BASE + escLits.length;
+        escMap.set(lit, tid);
+        escLits.push(lit);
+        escLens.push(getUtf8ByteLength(lit));
+      }
+    }
+    if (tokenCount === cap) {
+      cap *= 2;
+      const grown = new Int32Array(cap);
+      grown.set(rawIds);
+      rawIds = grown;
+    }
+    rawIds[tokenCount++] = tid;
+  }
+
+  const maxAvail = Math.max(0, 254 - preLen);
+  const maxDyn = profile === 'fast' ? Math.min(18, maxAvail) : profile === 'maximum' ? maxAvail : Math.min(36, maxAvail);
+  const minFreq = profile === 'fast' ? 3 : 2;
+  const minSav = profile === 'fast' ? 5 : 3;
+
+  const dynamicMerged: string[] = [];
+  const dynLens = new Uint8Array(maxDyn);
+  const getLen = (id: number): number =>
+    id < preLen ? V24_BASELINE_UTF8_LENS[id] : id < ESC_BASE ? dynLens[id - preLen] : escLens[id - ESC_BASE];
+  const getStr = (id: number): string =>
+    id < preLen ? PRECOMPILED_VOCAB[id] : id < ESC_BASE ? dynamicMerged[id - preLen] : escLits[id - ESC_BASE];
+
+  let finalIds: Int32Array;
+  if (tokenCount >= 2 && maxDyn > 0) {
+    const tokIds = rawIds.subarray(0, tokenCount);
+    const prev = new Int32Array(tokenCount);
+    const next = new Int32Array(tokenCount);
+    const occPrev = new Int32Array(tokenCount);
+    const occNext = new Int32Array(tokenCount);
+    const keyAt = new Float64Array(tokenCount);
+    for (let idx = 0; idx < tokenCount; idx++) {
+      prev[idx] = idx - 1;
+      next[idx] = idx + 1 < tokenCount ? idx + 1 : -1;
+      occPrev[idx] = -1;
+      occNext[idx] = -1;
+      keyAt[idx] = -1;
+    }
+    const pairCount = new Map<number, number>();
+    const occHead = new Map<number, number>();
+    const heap = new V24BaselineHeap();
+
+    const linkPair = (nodeIdx: number, push: boolean) => {
+      const r = next[nodeIdx];
+      if (r === -1) return;
+      const key = tokIds[nodeIdx] * STRIDE + tokIds[r];
+      keyAt[nodeIdx] = key;
+      const cnt = (pairCount.get(key) || 0) + 1;
+      pairCount.set(key, cnt);
+      const oh = occHead.get(key);
+      occPrev[nodeIdx] = -1;
+      occNext[nodeIdx] = oh !== undefined ? oh : -1;
+      if (oh !== undefined) occPrev[oh] = nodeIdx;
+      occHead.set(key, nodeIdx);
+      if (push && cnt >= minFreq) {
+        const sav = cnt * (getLen(tokIds[nodeIdx]) + getLen(tokIds[r]) - 1);
+        if (sav >= minSav) heap.push(sav, cnt, key);
+      }
+    };
+    const unlinkPair = (nodeIdx: number) => {
+      const ok = keyAt[nodeIdx];
+      if (ok < 0) return;
+      const cnt = (pairCount.get(ok) || 0) - 1;
+      if (cnt <= 0) pairCount.delete(ok);
+      else pairCount.set(ok, cnt);
+      const p = occPrev[nodeIdx];
+      const nx = occNext[nodeIdx];
+      if (p !== -1) occNext[p] = nx;
+      else if (nx !== -1) occHead.set(ok, nx);
+      else occHead.delete(ok);
+      if (nx !== -1) occPrev[nx] = p;
+      occPrev[nodeIdx] = -1;
+      occNext[nodeIdx] = -1;
+      keyAt[nodeIdx] = -1;
+    };
+
+    for (let idx = 0; idx < tokenCount - 1; idx++) linkPair(idx, false);
+    for (const [k, f] of pairCount.entries()) {
+      if (f < minFreq) continue;
+      const a = Math.floor(k / STRIDE);
+      const b = k - a * STRIDE;
+      const sav = f * (getLen(a) + getLen(b) - 1);
+      if (sav >= minSav) heap.push(sav, f, k);
+    }
+
+    const pop = { savings: 0, freq: 0, key: 0 };
+    const pos: number[] = [];
+    let curCnt = tokenCount;
+    while (dynamicMerged.length < maxDyn && heap.popInto(pop)) {
+      const af = pairCount.get(pop.key) || 0;
+      if (af < minFreq) continue;
+      const a = Math.floor(pop.key / STRIDE);
+      const b = pop.key - a * STRIDE;
+      const mLen = getLen(a) + getLen(b);
+      const aSav = af * (mLen - 1);
+      if (aSav < minSav) continue;
+      if (af !== pop.freq) {
+        heap.push(aSav, af, pop.key);
+        continue;
+      }
+      const ni = dynamicMerged.length;
+      const nid = preLen + ni;
+      dynLens[ni] = mLen;
+      dynamicMerged.push(getStr(a) + getStr(b));
+      pos.length = 0;
+      let oc = occHead.get(pop.key);
+      while (oc !== undefined && oc !== -1) {
+        pos.push(oc);
+        oc = occNext[oc];
+      }
+      if (pos.length > 1) pos.sort((x, y) => x - y);
+      for (const ln of pos) {
+        if (keyAt[ln] !== pop.key) continue;
+        const rn = next[ln];
+        if (rn === -1) continue;
+        const lnb = prev[ln];
+        const rnb = next[rn];
+        if (lnb !== -1) unlinkPair(lnb);
+        unlinkPair(ln);
+        unlinkPair(rn);
+        tokIds[ln] = nid;
+        next[ln] = rnb;
+        if (rnb !== -1) prev[rnb] = ln;
+        prev[rn] = -1;
+        next[rn] = -1;
+        curCnt--;
+        if (lnb !== -1) linkPair(lnb, true);
+        if (rnb !== -1) linkPair(ln, true);
+      }
+    }
+    finalIds = new Int32Array(curCnt);
+    let wi = 0;
+    let cur = 0;
+    while (cur !== -1) {
+      finalIds[wi++] = tokIds[cur];
+      cur = next[cur];
+    }
+  } else {
+    finalIds = rawIds.slice(0, tokenCount);
+  }
+
+  const escBufs = escLits.map((s) => encoder.encode(s));
+  let streamLen = 0;
+  for (const id of finalIds) {
+    if (id < ESCAPE_TOKEN) streamLen += 1;
+    else {
+      const rb = id >= ESC_BASE ? escBufs[id - ESC_BASE] : encoder.encode(dynamicMerged[id - preLen]);
+      streamLen += rb.length > 255 ? Math.ceil(rb.length / 255) * 2 + rb.length : 2 + rb.length;
+    }
+  }
+
+  const metaBytes = encoder.encode(JSON.stringify(fullMetadata));
+  const dynBufs = dynamicMerged.map((d) => encoder.encode(d));
+  let dynSec = 1;
+  for (const b of dynBufs) dynSec += 1 + b.length;
+
+  const payload = new Uint8Array(MTX_V24_EXTENDED_HEADER_SIZE + 2 + metaBytes.length + dynSec + 4 + streamLen);
+  const dv = new DataView(payload.buffer);
+  let off = 0;
+  payload.set(MTX_V24_PAYLOAD_MAGIC, off);
+  off += 4;
+  dv.setUint16(off, MTX_V24_FORMAT_SPEC, false);
+  off += 2;
+  dv.setUint32(off, crc32Checksum, false);
+  off += 4;
+  dv.setUint32(off, PRECOMPILED_VOCAB_HASH, false);
+  off += 4;
+  dv.setUint32(off, finalIds.length, false);
+  off += 4;
+
+  dv.setUint16(off, metaBytes.length, false);
+  off += 2;
+  payload.set(metaBytes, off);
+  off += metaBytes.length;
+  payload[off++] = dynBufs.length;
+  for (const b of dynBufs) {
+    payload[off++] = b.length;
+    payload.set(b, off);
+    off += b.length;
+  }
+  dv.setUint32(off, streamLen, false);
+  off += 4;
+  for (const id of finalIds) {
+    if (id < ESCAPE_TOKEN) {
+      payload[off++] = id;
+    } else {
+      const rb = id >= ESC_BASE ? escBufs[id - ESC_BASE] : encoder.encode(dynamicMerged[id - preLen]);
+      if (rb.length > 255) {
+        for (let so = 0; so < rb.length; so += 255) {
+          const sl = rb.subarray(so, so + 255);
+          payload[off++] = ESCAPE_TOKEN;
+          payload[off++] = sl.length;
+          payload.set(sl, off);
+          off += sl.length;
+        }
+      } else {
+        payload[off++] = ESCAPE_TOKEN;
+        payload[off++] = rb.length;
+        payload.set(rb, off);
+        off += rb.length;
+      }
+    }
+  }
+
+  const deflateLevel = (profile === 'fast' ? 5 : profile === 'maximum' ? 9 : 8) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  const compressed = deflateSync(payload, { level: deflateLevel });
+  const salt = (Math.random() * 0xffffffff) >>> 0;
+  const encrypted = applyMtxKeystream(compressed, salt);
+  const out = new Uint8Array(MTX_HEADER_SIZE + encrypted.length);
+  out.set(MTX_MAGIC_V2, 0);
+  out[4] = 24;
+  out[5] = 0x7f;
+  const hDv = new DataView(out.buffer);
+  hDv.setUint32(6, salt, false);
+  hDv.setUint32(10, checksum, false);
+  hDv.setUint32(14, rawUtf8Bytes, false);
+  hDv.setUint16(18, 0, false);
+  out.set(encrypted, MTX_HEADER_SIZE);
+  return out;
 }
