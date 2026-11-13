@@ -1,0 +1,519 @@
+<div class="min-h-screen bg-slate-50 text-slate-900">
+  <!-- 3-Zone Top Bar Contract -->
+  <header class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-8">
+      <a
+        href="#top"
+        class="text-base font-semibold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+      >
+        MTX Codec Workbench
+      </a>
+
+      <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
+        <a href="#encoder" class="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0">
+          Encoder
+        </a>
+        <a href="#inspector" class="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0">
+          Inspector
+        </a>
+        <a href="#compatibility" class="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0">
+          Compatibility
+        </a>
+        <a href="#verification" class="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0">
+          Benchmarks
+        </a>
+      </nav>
+
+      <div class="flex items-center shrink-0">
+        <button
+          type="button"
+          (click)="runVerificationSuite()"
+          [disabled]="isRunningSuite()"
+          class="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <mat-icon class="!text-base !w-4 !h-4 leading-none">play_arrow</mat-icon>
+          <span>{{ isRunningSuite() ? 'Running Suite...' : 'Run Benchmark & Suite' }}</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top" class="max-w-7xl mx-auto px-6 py-8 space-y-10">
+    <!-- Hero Overview -->
+    <section class="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-6 border-b border-slate-200">
+      <div class="space-y-2 max-w-2xl">
+        <div class="text-xs font-medium text-slate-500 flex items-center gap-2">
+          <span>Engine {{ engineVersion }}</span>
+          <span aria-hidden="true">·</span>
+          <span>Format v2.4 ({{ currentFormatVersion }})</span>
+          <span aria-hidden="true">·</span>
+          <span>Single-File Indexed BPE &amp; Reverse Lookup</span>
+        </div>
+        <h1 class="text-2xl md:text-3xl font-semibold tracking-tight text-slate-900" style="text-wrap: balance;">
+          Indexed Arabic Morpheme Compression &amp; Cross-Version Compatibility
+        </h1>
+        <p class="text-sm text-slate-600 leading-relaxed">
+          Single-file MTX v2.4 engine featuring root-indexed Radix Trie matching, integer-ID doubly-linked BPE with binary max-heap, reverse vocabulary lookup tables, bounded LRU caching, and full compatibility across v1.0–v2.4.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-3 shrink-0">
+        <label
+          class="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+        >
+          <mat-icon class="!text-base !w-4 !h-4 leading-none">upload_file</mat-icon>
+          <span>Load .mtx File</span>
+          <input type="file" accept=".mtx" class="hidden" (change)="onFileSelected($event)" />
+        </label>
+        <button
+          type="button"
+          (click)="downloadCurrentBuffer()"
+          [disabled]="!activeBuffer()"
+          class="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+        >
+          <mat-icon class="!text-base !w-4 !h-4 leading-none">download</mat-icon>
+          <span>Export .mtx</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Primary 2-Column Workbench -->
+    <section id="encoder" class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <!-- Left Column: Input & Compression Controls -->
+      <div class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div class="flex items-center justify-between gap-4">
+          <h2 class="text-base font-semibold text-slate-900">01. Source Input &amp; Encoder</h2>
+          <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+            <button
+              type="button"
+              (click)="applyPreset('tashkeel')"
+              class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Tashkeel
+            </button>
+            <button
+              type="button"
+              (click)="applyPreset('mixed_unicode')"
+              class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Unicode
+            </button>
+            <button
+              type="button"
+              (click)="applyPreset('large_chapter')"
+              class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Large
+            </button>
+            <button
+              type="button"
+              (click)="applyPreset('empty')"
+              class="px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-white rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Empty
+            </button>
+          </div>
+        </div>
+
+        <form [formGroup]="encoderForm" class="space-y-4">
+          <div>
+            <label for="mtx-input-text" class="block text-xs font-medium text-slate-600 mb-1.5">
+              Source Text (Arabic / Mixed UTF-8)
+            </label>
+            <textarea
+              id="mtx-input-text"
+              formControlName="text"
+              rows="6"
+              dir="auto"
+              class="w-full rounded-lg border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm text-slate-900 leading-relaxed focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400"
+              placeholder="أدخل النص العربي أو متعدد اللغات هنا..."
+            ></textarea>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label for="mtx-title" class="block text-xs font-medium text-slate-600 mb-1">Title</label>
+              <input
+                id="mtx-title"
+                type="text"
+                formControlName="title"
+                dir="auto"
+                class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
+              />
+            </div>
+            <div>
+              <label for="mtx-author" class="block text-xs font-medium text-slate-600 mb-1">Author</label>
+              <input
+                id="mtx-author"
+                type="text"
+                formControlName="author"
+                dir="auto"
+                class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
+              />
+            </div>
+            <div>
+              <label for="mtx-chapter" class="block text-xs font-medium text-slate-600 mb-1">Chapter</label>
+              <input
+                id="mtx-chapter"
+                type="text"
+                formControlName="chapterTitle"
+                dir="auto"
+                class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="mtx-profile" class="block text-xs font-medium text-slate-600 mb-1">
+                Compression Profile
+              </label>
+              <select
+                id="mtx-profile"
+                formControlName="profile"
+                class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
+              >
+                <option value="balanced">Balanced (36 dynamic BPE slots, Deflate 8)</option>
+                <option value="maximum">Maximum (Max BPE slots, Deflate 9)</option>
+                <option value="fast">Fast (18 dynamic BPE slots, Deflate 5)</option>
+              </select>
+            </div>
+            <div>
+              <label for="mtx-target-format" class="block text-xs font-medium text-slate-600 mb-1">
+                Target Binary Fixture
+              </label>
+              <select
+                id="mtx-target-format"
+                formControlName="targetFormat"
+                class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-slate-400"
+              >
+                <option value="v24">MTX v2.4 (Current Indexed Output)</option>
+                <option value="v23">MTX v2.3 (Baseline Format)</option>
+                <option value="v22">MTX v2.2 (Exact Fortified Spec)</option>
+                <option value="v21_lcg">MTX v2.1 (Simulated LCG Fixture)</option>
+                <option value="v21_nonlinear">MTX v2.1 (Simulated Non-Linear Fixture)</option>
+                <option value="v10">MTX v1.0 (Simulated MTX1 Fixture)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="pt-1 flex flex-wrap items-center justify-between gap-3">
+            <div class="text-xs text-slate-500 tabular-nums flex items-center gap-2">
+              <span>{{ textAnalysis().totalChars }} chars</span>
+              <span aria-hidden="true">·</span>
+              <span>{{ textAnalysis().estimatedUtf8Bytes }} UTF-8 B</span>
+              <span aria-hidden="true">·</span>
+              <span>{{ textAnalysis().tashkeelDensityPercent }}% tashkeel</span>
+            </div>
+
+            <button
+              type="button"
+              (click)="encodeAndInspect()"
+              [disabled]="isBusy()"
+              class="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <mat-icon class="!text-base !w-4 !h-4 leading-none">compress</mat-icon>
+              <span>{{ isBusy() ? 'Processing...' : 'Encode & Decompress' }}</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- Fault Injection & Cache Controls -->
+        <div class="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-medium text-slate-500">Fault Injection:</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              (click)="simulateFailure('corrupt_payload')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">broken_image</mat-icon>
+              <span>Corrupt Payload</span>
+            </button>
+            <button
+              type="button"
+              (click)="simulateFailure('unsupported_v25')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">block</mat-icon>
+              <span>Unsupported v2.5</span>
+            </button>
+            <button
+              type="button"
+              (click)="simulateFailure('invalid_magic')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">error_outline</mat-icon>
+              <span>Invalid Magic</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Unified Decompressor & Header Inspector -->
+      <div id="inspector" class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div class="flex items-center justify-between gap-4">
+          <h2 class="text-base font-semibold text-slate-900">02. Version Detection &amp; Unified Decoder</h2>
+          <span class="text-xs text-slate-500 truncate max-w-[240px]">{{ activeSourceLabel() }}</span>
+        </div>
+
+        @if (decoderError()) {
+          <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 flex items-start gap-3">
+            <mat-icon class="text-red-700 !text-lg !w-5 !h-5 shrink-0 mt-0.5">gpp_bad</mat-icon>
+            <div class="space-y-1">
+              <div class="text-xs font-semibold text-red-900">Decompression / Validation Error</div>
+              <div class="text-xs text-red-800 leading-relaxed">{{ decoderError() }}</div>
+            </div>
+          </div>
+        }
+
+        @if (headerInspection(); as info) {
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-slate-200">
+            <div>
+              <div class="text-xs text-slate-500">Magic</div>
+              <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">{{ info.magic }}</div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-500">Format Version</div>
+              <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">
+                {{ info.versionLabel }} ({{ info.formatVersion }})
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-500">Classification</div>
+              <div class="text-sm font-semibold text-slate-900 mt-0.5">
+                {{ info.isCurrentFormat ? 'Current' : info.isLegacyFormat ? 'Legacy' : 'Compatible' }}
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-500">Header Flags</div>
+              <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">
+                0x{{ info.header.flags.toString(16).toUpperCase().padStart(2, '0') }}
+              </div>
+            </div>
+          </div>
+        }
+
+        @if (decompressionResult(); as dec) {
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-slate-200 tabular-nums">
+              <div>
+                <div class="text-xs text-slate-500">Original UTF-8</div>
+                <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">{{ dec.originalUtf8Bytes }} B</div>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500">Compressed MTX</div>
+                <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">{{ dec.compressedBytes }} B</div>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500">Savings</div>
+                <div class="text-sm font-semibold font-mono text-emerald-700 mt-0.5">{{ dec.savingsPercent }}%</div>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500">Decode Time</div>
+                <div class="text-sm font-semibold font-mono text-slate-900 mt-0.5">{{ dec.decodingDurationMs }} ms</div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div class="flex items-center gap-2">
+                @if (dec.isLossless && roundTripMatchesInput() !== false) {
+                  <mat-icon class="text-emerald-700 !text-base !w-4 !h-4 leading-none">verified</mat-icon>
+                  <span class="font-medium text-emerald-800">Lossless Integrity Verified</span>
+                } @else {
+                  <mat-icon class="text-amber-700 !text-base !w-4 !h-4 leading-none">warning</mat-icon>
+                  <span class="font-medium text-amber-800">Integrity / Input Diff Warning</span>
+                }
+              </div>
+              <div class="text-slate-500 font-mono">
+                Decoder: {{ dec.decoderId }}
+              </div>
+            </div>
+
+            <div class="text-xs text-slate-500 font-mono flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Adler-32: {{ formatHex(dec.checksum) }} ({{ dec.integrityDetails.adler32Matched ? 'OK' : 'FAIL' }})</span>
+              <span>
+                CRC-32: {{ formatHex(dec.crc32Checksum) }}
+                ({{ dec.integrityDetails.crc32Verified === null ? 'N/A in legacy' : dec.integrityDetails.crc32Verified ? 'OK' : 'FAIL' }})
+              </span>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between text-xs text-slate-600 mb-1.5">
+                <span class="font-medium">Recovered Output</span>
+                <span class="font-mono tabular-nums">{{ dec.tokenCount }} tokens · vocab {{ dec.dictionarySize }}</span>
+              </div>
+              <div
+                dir="auto"
+                class="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-900 leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap"
+              >
+                {{ dec.text || '(empty string)' }}
+              </div>
+            </div>
+          </div>
+        }
+
+        @if (hexPreview()) {
+          <div class="pt-3 border-t border-slate-200">
+            <div class="text-xs font-medium text-slate-600 mb-1.5">Binary Header Hex Preview (First 48 Bytes)</div>
+            <pre class="rounded-lg bg-slate-900 text-slate-100 p-3 text-xs font-mono overflow-x-auto leading-relaxed">{{ hexPreview() }}</pre>
+          </div>
+        }
+      </div>
+    </section>
+
+    <!-- Format Compatibility Layer Registry & Cache Telemetry -->
+    <section id="compatibility" class="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900">03. Format Compatibility Layer &amp; Smart Cache</h2>
+          <p class="text-xs text-slate-500 mt-0.5">
+            Decoders registered in the single-file MTX v2.4 engine, plus bounded LRU cache metrics.
+          </p>
+        </div>
+        <div class="flex items-center gap-3 text-xs font-mono text-slate-600 tabular-nums shrink-0">
+          <span>LRU: {{ cacheStats().tokenizationEntries }}/24 entries ({{ cacheStats().tokenizationHits }} hits)</span>
+          <button
+            type="button"
+            (click)="clearCaches()"
+            class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-sans font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+          >
+            <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">cleaning_services</mat-icon>
+            <span>Clear Cache</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="border-b border-slate-200 text-slate-500 font-medium">
+              <th class="py-2.5 pr-4">Decoder ID</th>
+              <th class="py-2.5 pr-4">Format Label</th>
+              <th class="py-2.5 pr-4">Magic</th>
+              <th class="py-2.5 pr-4">Version Bytes</th>
+              <th class="py-2.5">Scope &amp; Behavior</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            @for (dec of decoders; track dec.decoderId) {
+              <tr class="hover:bg-slate-50/70">
+                <td class="py-3 pr-4 font-mono font-medium text-slate-900 whitespace-nowrap">{{ dec.decoderId }}</td>
+                <td class="py-3 pr-4 text-slate-800 whitespace-nowrap">{{ dec.formatLabel }}</td>
+                <td class="py-3 pr-4 font-mono text-slate-600 whitespace-nowrap">{{ dec.supportedMagic.join(', ') }}</td>
+                <td class="py-3 pr-4 font-mono text-slate-600 whitespace-nowrap">{{ dec.supportedVersions.join(', ') }}</td>
+                <td class="py-3 text-slate-600" dir="auto">{{ dec.description }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Live Benchmark & Verification Matrix -->
+    <section id="verification" class="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900">04. v2.3 vs v2.4 Benchmark &amp; Verification Matrix</h2>
+          <p class="text-xs text-slate-500 mt-0.5">
+            Measures raw algorithmic performance after JIT warmup with LRU cache disabled so BPE, Trie, and Reverse Index gains are measured directly.
+          </p>
+        </div>
+        <button
+          type="button"
+          (click)="runVerificationSuite()"
+          [disabled]="isRunningSuite()"
+          class="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+        >
+          <mat-icon class="!text-base !w-4 !h-4 leading-none">speed</mat-icon>
+          <span>{{ isRunningSuite() ? 'Running...' : 'Run Benchmark & Checks' }}</span>
+        </button>
+      </div>
+
+      @if (benchmarkRows().length > 0) {
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-xs tabular-nums">
+            <thead>
+              <tr class="border-b border-slate-200 text-slate-500 font-medium">
+                <th class="py-2.5 pr-4">Workload</th>
+                <th class="py-2.5 pr-4 text-right">UTF-8</th>
+                <th class="py-2.5 pr-4 text-right">v2.3 / v2.4 Size</th>
+                <th class="py-2.5 pr-4 text-right">Comp v2.3 -> v2.4</th>
+                <th class="py-2.5 pr-4 text-right">Comp Gain</th>
+                <th class="py-2.5 pr-4 text-right">Dec v2.3 -> v2.4</th>
+                <th class="py-2.5 pr-4 text-right">Dec Gain</th>
+                <th class="py-2.5 text-right">v2.4 Dec MB/s</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              @for (row of benchmarkRows(); track row.workload) {
+                <tr class="hover:bg-slate-50/70">
+                  <td class="py-3 pr-4 font-medium text-slate-900 whitespace-nowrap">{{ row.workload }}</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-600">{{ row.utf8Bytes }} B</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-600">{{ row.v23Bytes }} / {{ row.v24Bytes }} B</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v23CompMs }} -> {{ row.v24CompMs }} ms</td>
+                  <td class="py-3 pr-4 text-right font-mono font-semibold text-emerald-700">{{ row.compGainPct }}%</td>
+                  <td class="py-3 pr-4 text-right font-mono text-slate-800">{{ row.v23DecMs }} -> {{ row.v24DecMs }} ms</td>
+                  <td class="py-3 pr-4 text-right font-mono font-semibold text-emerald-700">{{ row.decGainPct }}%</td>
+                  <td class="py-3 text-right font-mono text-slate-900">{{ row.v24DecMBs }} MB/s</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      @if (verificationResults().length === 0) {
+        <div class="rounded-lg border border-dashed border-slate-200 py-8 px-4 text-center">
+          <p class="text-xs text-slate-600">
+            Click "Run Benchmark &amp; Suite" to execute live v2.3 vs v2.4 performance comparisons and cross-version integrity checks.
+          </p>
+        </div>
+      } @else {
+        <div class="overflow-x-auto pt-2 border-t border-slate-200">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="border-b border-slate-200 text-slate-500 font-medium">
+                <th class="py-2.5 pr-4">Case</th>
+                <th class="py-2.5 pr-4">Status</th>
+                <th class="py-2.5 pr-4">Basis</th>
+                <th class="py-2.5 pr-4">Details</th>
+                <th class="py-2.5 text-right">Time</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              @for (item of verificationResults(); track item.id) {
+                <tr class="hover:bg-slate-50/70">
+                  <td class="py-3 pr-4 font-medium text-slate-900 whitespace-nowrap">
+                    <span class="font-mono text-slate-500 mr-1.5">{{ item.id }}</span>
+                    {{ item.title }}
+                  </td>
+                  <td class="py-3 pr-4 whitespace-nowrap">
+                    @if (item.passed) {
+                      <span class="inline-flex items-center gap-1 font-medium text-emerald-700">
+                        <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">check_circle</mat-icon>
+                        PASS
+                      </span>
+                    } @else {
+                      <span class="inline-flex items-center gap-1 font-medium text-red-700">
+                        <mat-icon class="!text-sm !w-3.5 !h-3.5 leading-none">cancel</mat-icon>
+                        FAIL
+                      </span>
+                    }
+                  </td>
+                  <td class="py-3 pr-4 text-slate-600 whitespace-nowrap">
+                    {{ item.scope === 'reconstructed' ? 'Reconstructed Fixture' : item.scope === 'verified' ? 'Verified Spec' : 'Fault Injection' }}
+                  </td>
+                  <td class="py-3 pr-4 text-slate-600">{{ item.details }}</td>
+                  <td class="py-3 text-right font-mono tabular-nums text-slate-500 whitespace-nowrap">
+                    {{ item.durationMs }} ms
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  </main>
+</div>

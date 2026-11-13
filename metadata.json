@@ -1,0 +1,6 @@
+{
+  "name": "MTX Codec v2.3 Workbench",
+  "description": "Unified MTX v2.3 Arabic text compression engine with version detection, format compatibility layer, and legacy decoder support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
